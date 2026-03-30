@@ -3,7 +3,7 @@
 # https://github.com/paperclipai/paperclip
 #
 # Builds Paperclip from source by cloning the official repo.
-# Based on the official Paperclip Dockerfile structure.
+# Mirrors the official Dockerfile structure exactly.
 # =============================================================================
 
 FROM node:lts-trixie-slim AS base
@@ -12,43 +12,43 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
-# Clone Paperclip source at build time
+# Clone Paperclip source at build time into a temp location
 FROM base AS source
-WORKDIR /app
+WORKDIR /src
 RUN git clone --depth 1 https://github.com/paperclipai/paperclip.git .
 
-# Install dependencies
+# Install dependencies (using cloned source)
 FROM base AS deps
 WORKDIR /app
-COPY --from=source /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml /app/.npmrc ./
-COPY --from=source /app/cli/package.json cli/
-COPY --from=source /app/server/package.json server/
-COPY --from=source /app/ui/package.json ui/
-COPY --from=source /app/packages/shared/package.json packages/shared/
-COPY --from=source /app/packages/db/package.json packages/db/
-COPY --from=source /app/packages/adapter-utils/package.json packages/adapter-utils/
-COPY --from=source /app/packages/adapters/claude-local/package.json packages/adapters/claude-local/
-COPY --from=source /app/packages/adapters/codex-local/package.json packages/adapters/codex-local/
-COPY --from=source /app/packages/adapters/cursor-local/package.json packages/adapters/cursor-local/
-COPY --from=source /app/packages/adapters/gemini-local/package.json packages/adapters/gemini-local/
-COPY --from=source /app/packages/adapters/openclaw-gateway/package.json packages/adapters/openclaw-gateway/
-COPY --from=source /app/packages/adapters/opencode-local/package.json packages/adapters/opencode-local/
-COPY --from=source /app/packages/adapters/pi-local/package.json packages/adapters/pi-local/
-COPY --from=source /app/packages/plugins/sdk/package.json packages/plugins/sdk/
-COPY --from=source /app/patches/ patches/
+COPY --from=source /src/package.json /src/pnpm-workspace.yaml /src/pnpm-lock.yaml /src/.npmrc ./
+COPY --from=source /src/cli/package.json cli/
+COPY --from=source /src/server/package.json server/
+COPY --from=source /src/ui/package.json ui/
+COPY --from=source /src/packages/shared/package.json packages/shared/
+COPY --from=source /src/packages/db/package.json packages/db/
+COPY --from=source /src/packages/adapter-utils/package.json packages/adapter-utils/
+COPY --from=source /src/packages/adapters/claude-local/package.json packages/adapters/claude-local/
+COPY --from=source /src/packages/adapters/codex-local/package.json packages/adapters/codex-local/
+COPY --from=source /src/packages/adapters/cursor-local/package.json packages/adapters/cursor-local/
+COPY --from=source /src/packages/adapters/gemini-local/package.json packages/adapters/gemini-local/
+COPY --from=source /src/packages/adapters/openclaw-gateway/package.json packages/adapters/openclaw-gateway/
+COPY --from=source /src/packages/adapters/opencode-local/package.json packages/adapters/opencode-local/
+COPY --from=source /src/packages/adapters/pi-local/package.json packages/adapters/pi-local/
+COPY --from=source /src/packages/plugins/sdk/package.json packages/plugins/sdk/
+COPY --from=source /src/patches/ patches/
 RUN pnpm install --frozen-lockfile
 
 # Build
 FROM base AS build
 WORKDIR /app
 COPY --from=deps /app /app
-COPY --from=source /app /app
+COPY --from=source /src .
 RUN pnpm --filter @paperclipai/ui build
 RUN pnpm --filter @paperclipai/plugin-sdk build
 RUN pnpm --filter @paperclipai/server build
 RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
 
-# Production image
+# Production image — copy entire build tree (mirrors official Dockerfile)
 FROM base AS production
 WORKDIR /app
 
@@ -56,14 +56,7 @@ LABEL org.opencontainers.image.source="https://github.com/nikushasta2026/stilgar
 LABEL org.opencontainers.image.description="Paperclip AI Company OS"
 LABEL org.opencontainers.image.licenses="MIT"
 
-# Copy build artifacts from build stage
-COPY --from=build /app/.next /app/.next
-COPY --from=build /app/public /app/public
-COPY --from=build /app/package.json /app/package.json
-COPY --from=build /app/pnpm-lock.yaml /app/pnpm-lock.yaml
-COPY --from=build /app/node_modules /app/node_modules
-COPY --from=build /app/next.config.* /app/ 2>/dev/null || true
-COPY --from=build /app/prisma /app/prisma 2>/dev/null || true
+COPY --chown=node:node --from=build /app /app
 
 RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai \
   && mkdir -p /paperclip \
@@ -84,7 +77,6 @@ ENV NODE_ENV=production \
 VOLUME ["/paperclip"]
 EXPOSE 3100
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
     CMD curl -f http://localhost:3100/api/health || wget -qO- http://localhost:3100/api/health || exit 1
 
