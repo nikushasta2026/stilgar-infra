@@ -38,6 +38,9 @@ COPY --from=source /app/packages/plugins/sdk/package.json packages/plugins/sdk/
 COPY --from=source /app/patches/ patches/
 RUN pnpm install --frozen-lockfile
 
+# Install pnpm globally in deps stage for access in production stage
+RUN npm install -g pnpm@latest
+
 # Build
 FROM base AS build
 WORKDIR /app
@@ -54,8 +57,21 @@ WORKDIR /app
 
 LABEL org.opencontainers.image.source="https://github.com/nikushasta2026/stilgar-infra"
 LABEL org.opencontainers.image.description="Paperclip AI Company OS"
+LABEL org.opencontainers.image.licenses="MIT"
 
-COPY --chown=node:node --from=build /app /app
+# Copy build artifacts from build stage
+COPY --from=build /app/.next /app/.next
+COPY --from=build /app/public /app/public
+COPY --from=build /app/package.json /app/package.json
+COPY --from=build /app/pnpm-lock.yaml /app/pnpm-lock.yaml
+COPY --from=build /app/node_modules /app/node_modules
+COPY --from=build /app/next.config.* /app/ 2>/dev/null || true
+COPY --from=build /app/prisma /app/prisma 2>/dev/null || true
+
+# Install global CLI tools required by Paperclip
+# Copy pnpm from deps stage to ensure it's available in production
+COPY --from=deps /usr/local/lib/node_modules/pnpm /usr/local/lib/node_modules/pnpm
+
 RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai \
   && mkdir -p /paperclip \
   && chown node:node /paperclip
@@ -69,14 +85,15 @@ ENV NODE_ENV=production \
   PAPERCLIP_INSTANCE_ID=default \
   PAPERCLIP_CONFIG=/paperclip/instances/default/config.json \
   PAPERCLIP_DEPLOYMENT_MODE=authenticated \
-  PAPERCLIP_DEPLOYMENT_EXPOSURE=private
+  PAPERCLIP_DEPLOYMENT_EXPOSURE=private \
+  PAPERCLIP_ALLOWED_HOSTNAMES=77.42.7.12,100.94.62.93,localhost
 
 VOLUME ["/paperclip"]
 EXPOSE 3100
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
-    CMD curl -f http://localhost:3100/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:3100/api/health || wget -qO- http://localhost:3100/api/health || exit 1
 
 USER node
 CMD ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
