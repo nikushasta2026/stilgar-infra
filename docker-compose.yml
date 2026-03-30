@@ -41,6 +41,8 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/paperclip:${TAG:-latest}
     container_name: paperclip
     restart: unless-stopped
+    ports:
+      - "3100:3100"
     volumes:
       - paperclip-data:/paperclip
     environment:
