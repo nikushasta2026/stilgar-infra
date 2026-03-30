@@ -19,12 +19,47 @@ version: '3.9'
 volumes:
   paperclip-data:
     name: paperclip-data
+  postgres-data:
+    name: postgres-data
   nanoclaw-ceo-data:
     name: nanoclaw-ceo-data
   hermes-data:
     name: hermes-data
 
 services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Persistent database for Paperclip
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-paperclip}
+      - POSTGRES_USER=${POSTGRES_USER:-paperclip}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-paperclip} -d ${POSTGRES_DB:-paperclip}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   # ---------------------------------------------------------------------------
   # Paperclip — AI Company OS
@@ -36,12 +71,17 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/paperclip:${TAG:-latest}
     container_name: paperclip
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "3100:3100"
     volumes:
       - paperclip-data:/paperclip
     environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-paperclip}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-paperclip}
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
+      - BETTER_AUTH_BASE_URL=${BETTER_AUTH_BASE_URL:-http://77.42.7.12:3100}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PAPERCLIP_HOME=/paperclip
       - HOST=0.0.0.0
