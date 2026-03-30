@@ -10,23 +10,23 @@ Caddy is the front-end proxy for all Stilgar services. It handles:
 
 | Subdomain | Service | Internal Port |
 |-----------|---------|---------------|
-| `crm.<CADDY_DOMAIN>` | Twenty CRM | 3000 |
-| `paperclip.<CADDY_DOMAIN>` | Paperclip AI OS | 3101 |
-| `ceo.<CADDY_DOMAIN>` | NanoClaw CEO | 3000 |
-| `hermes.<CADDY_DOMAIN>` | Hermes Agent | 8080 |
-| `<CADDY_DOMAIN>` (root) | Redirect to CRM | — |
+| `crm.shasta-collective.com` | Twenty CRM | 3000 |
+| `paperclip.shasta-collective.com` | Paperclip AI OS | 3101 |
+| `ceo.shasta-collective.com` | NanoClaw CEO | 3000 |
+| `hermes.shasta-collective.com` | Hermes Agent | 8080 |
+| `shasta-collective.com` (root) | Redirect to CRM | — |
 
 ## Setup
 
 1. **Point DNS** — Add A records for each subdomain to Stilgar's IP (77.42.7.12):
    ```
-   crm.yourdomain.com        → 77.42.7.12
-   paperclip.yourdomain.com  → 77.42.7.12
-   ceo.yourdomain.com        → 77.42.7.12
-   hermes.yourdomain.com     → 77.42.7.12
-   yourdomain.com            → 77.42.7.12   (optional, for root redirect)
+   crm.shasta-collective.com        → 77.42.7.12
+   paperclip.shasta-collective.com  → 77.42.7.12
+   ceo.shasta-collective.com        → 77.42.7.12
+   hermes.shasta-collective.com     → 77.42.7.12
+   shasta-collective.com            → 77.42.7.12   (optional, for root redirect)
    ```
-   Or use a wildcard: `*.yourdomain.com → 77.42.7.12`
+   ✅ Wildcard already configured: `*.shasta-collective.com → 77.42.7.12`
 
 2. **Set env vars** in `.env`:
    ```
