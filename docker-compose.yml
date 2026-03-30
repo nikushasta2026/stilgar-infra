@@ -20,6 +20,8 @@ networks:
   paperclip-net:
     name: paperclip-net
     driver: bridge
+    name: paperclip-net
+    driver: bridge
 
 volumes:
   paperclip-data:
