@@ -42,7 +42,7 @@ services:
     container_name: paperclip
     restart: unless-stopped
     ports:
-      - "3100:3100"
+      - "3101:3101"
     volumes:
       - paperclip-data:/paperclip
     environment:
@@ -51,7 +51,7 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PAPERCLIP_HOME=/paperclip
       - HOST=0.0.0.0
-      - PORT=3100
+      - PORT=3101
       - SERVE_UI=true
       - NODE_ENV=production
     deploy:
@@ -63,7 +63,7 @@ services:
           cpus: '1'
           memory: 2G
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3100/api/health || wget -qO- http://localhost:3100/api/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3101/api/health || wget -qO- http://localhost:3101/api/health || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 90s
