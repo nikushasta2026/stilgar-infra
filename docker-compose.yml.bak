@@ -4,35 +4,37 @@ version: '3.9'
 # Stilgar Infrastructure — Full Stack Docker Compose
 # =============================================================================
 # Services:
-#   - paperclip:    AI Company OS
-#   - nanoclaw-ceo: OpenClaw CEO agent node
-#   - hermes:       NousResearch Hermes Agent
-#   - twenty-crm:   Twenty CRM — developer outreach CRM
+#   - caddy:        Reverse proxy + automatic SSL (ports 80, 443)
+#   - paperclip:    AI Company OS (internal only)
+#   - nanoclaw-ceo: OpenClaw CEO agent node (internal only)
+#   - hermes:       NousResearch Hermes Agent (internal only)
+#   - twenty-crm:   Twenty CRM (internal only) — developer outreach CRM
 #   - twenty-db:    PostgreSQL for Twenty CRM
 #   - twenty-redis: Redis for Twenty CRM
 #
 # Managed by Coolify on the Stilgar dedicated server (61GB RAM).
-# Coolify's Traefik proxy handles SSL (Let's Encrypt) and domain routing.
 #
-# Domain routing (via Coolify/Traefik):
-#   crm.shasta-collective.com        → twenty-crm:3000
-#   paperclip.shasta-collective.com  → paperclip:3101
-#   ceo.shasta-collective.com        → nanoclaw-ceo:3000
-#   hermes.shasta-collective.com     → hermes-agent:8080
+# Domain routing (via Caddy):
+#   crm.<CADDY_DOMAIN>        → twenty-crm
+#   paperclip.<CADDY_DOMAIN>  → paperclip
+#   ceo.<CADDY_DOMAIN>        → nanoclaw-ceo
+#   hermes.<CADDY_DOMAIN>     → hermes-agent
 #
-# Note: Caddy image (ghcr.io/nikushasta2026/caddy) is built/available in GHCR
-# but not deployed here — Coolify's built-in Traefik handles SSL/routing.
-#
-# Usage (standalone, no Coolify):
+# Usage (standalone):
 #   cp .env.example .env && nano .env
 #   docker compose up -d
 # =============================================================================
 
 networks:
-  coolify:
-    external: true
+  stilgar-net:
+    name: stilgar-net
+    driver: bridge
 
 volumes:
+  caddy-data:
+    name: caddy-data
+  caddy-config:
+    name: caddy-config
   paperclip-data:
     name: paperclip-data
   nanoclaw-ceo-data:
@@ -49,6 +51,45 @@ volumes:
 services:
 
   # ---------------------------------------------------------------------------
+  # Caddy — Reverse Proxy + Automatic SSL
+  # ---------------------------------------------------------------------------
+  caddy:
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    image: ${REGISTRY:-ghcr.io/nikushasta2026}/caddy:${TAG:-latest}
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      - caddy-data:/data           # Let's Encrypt certs persist here
+      - caddy-config:/config       # Caddy config cache
+    environment:
+      - CADDY_DOMAIN=${CADDY_DOMAIN}
+      - CADDY_EMAIL=${CADDY_EMAIL}
+    networks:
+      - stilgar-net
+    depends_on:
+      - paperclip
+      - nanoclaw-ceo
+      - hermes
+      - twenty-crm
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:2019/metrics > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
   # Paperclip — AI Company OS
   # ---------------------------------------------------------------------------
   paperclip:
@@ -58,13 +99,14 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/paperclip:${TAG:-latest}
     container_name: paperclip
     restart: unless-stopped
+    # No external port — access via Caddy only
     expose:
       - "3101"
     volumes:
       - paperclip-data:/paperclip
     environment:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-      - BETTER_AUTH_BASE_URL=${BETTER_AUTH_BASE_URL:-https://paperclip.shasta-collective.com}
+      - BETTER_AUTH_BASE_URL=${BETTER_AUTH_BASE_URL:-https://paperclip.${CADDY_DOMAIN}}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PAPERCLIP_HOME=/paperclip
       - HOST=0.0.0.0
@@ -72,14 +114,7 @@ services:
       - SERVE_UI=true
       - NODE_ENV=production
     networks:
-      - coolify
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.paperclip.rule=Host(`paperclip.shasta-collective.com`)"
-      - "traefik.http.routers.paperclip.entrypoints=https"
-      - "traefik.http.routers.paperclip.tls=true"
-      - "traefik.http.routers.paperclip.tls.certresolver=letsencrypt"
-      - "traefik.http.services.paperclip.loadbalancer.server.port=3101"
+      - stilgar-net
     deploy:
       resources:
         limits:
@@ -110,6 +145,7 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/nanoclaw-ceo:${TAG:-latest}
     container_name: nanoclaw-ceo
     restart: unless-stopped
+    # No external port — access via Caddy only
     expose:
       - "3000"
     volumes:
@@ -122,14 +158,7 @@ services:
       - SLACK_BOARD_CHANNEL=${SLACK_BOARD_CHANNEL:-}
       - NODE_ENV=production
     networks:
-      - coolify
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.nanoclaw-ceo.rule=Host(`ceo.shasta-collective.com`)"
-      - "traefik.http.routers.nanoclaw-ceo.entrypoints=https"
-      - "traefik.http.routers.nanoclaw-ceo.tls=true"
-      - "traefik.http.routers.nanoclaw-ceo.tls.certresolver=letsencrypt"
-      - "traefik.http.services.nanoclaw-ceo.loadbalancer.server.port=3000"
+      - stilgar-net
     deploy:
       resources:
         limits:
@@ -154,6 +183,7 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/hermes:${TAG:-latest}
     container_name: hermes-agent
     restart: unless-stopped
+    # No external port — access via Caddy only
     expose:
       - "8080"
     volumes:
@@ -163,14 +193,7 @@ services:
       - HERMES_MODEL=${HERMES_MODEL:-anthropic:claude-sonnet-4-6}
       - HERMES_PORT=8080
     networks:
-      - coolify
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.hermes.rule=Host(`hermes.shasta-collective.com`)"
-      - "traefik.http.routers.hermes.entrypoints=https"
-      - "traefik.http.routers.hermes.tls=true"
-      - "traefik.http.routers.hermes.tls.certresolver=letsencrypt"
-      - "traefik.http.services.hermes.loadbalancer.server.port=8080"
+      - stilgar-net
     deploy:
       resources:
         limits:
@@ -199,7 +222,7 @@ services:
       - POSTGRES_PASSWORD=${TWENTY_DB_PASSWORD:-twenty}
       - POSTGRES_DB=twenty
     networks:
-      - coolify
+      - stilgar-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${TWENTY_DB_USER:-twenty} -d twenty"]
       interval: 10s
@@ -218,7 +241,7 @@ services:
     volumes:
       - twenty-redis-data:/data
     networks:
-      - coolify
+      - stilgar-net
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -237,6 +260,7 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/twenty-crm:${TAG:-latest}
     container_name: twenty-crm
     restart: unless-stopped
+    # No external port — access via Caddy only
     expose:
       - "3000"
     volumes:
@@ -245,20 +269,13 @@ services:
       - PG_DATABASE_URL=postgresql://${TWENTY_DB_USER:-twenty}:${TWENTY_DB_PASSWORD:-twenty}@twenty-db:5432/twenty
       - REDIS_URL=redis://twenty-redis:6379
       - APP_SECRET=${TWENTY_APP_SECRET:-Q8fQC3wm9EIZRrnbtmzminBQ7Uz1n2et}
-      - SERVER_URL=${TWENTY_SERVER_URL:-https://crm.shasta-collective.com}
-      - FRONT_BASE_URL=${TWENTY_SERVER_URL:-https://crm.shasta-collective.com}
+      - SERVER_URL=${TWENTY_SERVER_URL:-https://crm.${CADDY_DOMAIN}}
+      - FRONT_BASE_URL=${TWENTY_SERVER_URL:-https://crm.${CADDY_DOMAIN}}
       - NODE_ENV=production
       - STORAGE_TYPE=local
       - STORAGE_LOCAL_PATH=/app/packages/twenty-server/.local-storage
     networks:
-      - coolify
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.twenty-crm.rule=Host(`crm.shasta-collective.com`)"
-      - "traefik.http.routers.twenty-crm.entrypoints=https"
-      - "traefik.http.routers.twenty-crm.tls=true"
-      - "traefik.http.routers.twenty-crm.tls.certresolver=letsencrypt"
-      - "traefik.http.services.twenty-crm.loadbalancer.server.port=3000"
+      - stilgar-net
     depends_on:
       twenty-db:
         condition: service_healthy
