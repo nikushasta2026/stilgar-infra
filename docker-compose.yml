@@ -114,7 +114,7 @@ services:
     container_name: hermes-agent
     restart: unless-stopped
     ports:
-      - "${HERMES_PORT:-8080}:8080"
+      - "${HERMES_PORT:-8081}:8080"
     volumes:
       - hermes-data:/home/hermes/.hermes
     environment:
