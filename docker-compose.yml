@@ -8,20 +8,13 @@ version: '3.9'
 #   - nanoclaw-ceo: OpenClaw CEO agent node (port 3000)
 #   - hermes:       NousResearch Hermes Agent (port 8080)
 #
-# All services share the paperclip-net network.
 # Managed by Coolify on the Stilgar dedicated server (61GB RAM).
+# Note: No custom network defined — Coolify manages its own bridge network.
 #
-# Usage:
+# Usage (standalone):
 #   cp .env.example .env && nano .env
 #   docker compose up -d
 # =============================================================================
-
-networks:
-  paperclip-net:
-    name: paperclip-net
-    driver: bridge
-    name: paperclip-net
-    driver: bridge
 
 volumes:
   paperclip-data:
@@ -43,18 +36,17 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/paperclip:${TAG:-latest}
     container_name: paperclip
     restart: unless-stopped
-    networks:
-      - paperclip-net
     ports:
       - "3100:3100"
     volumes:
-      - paperclip-data:/data/paperclip
+      - paperclip-data:/paperclip
     environment:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - DATABASE_URL=file:/data/paperclip/db.sqlite
-      - NEXT_PUBLIC_APP_URL=${PAPERCLIP_URL:-http://localhost:3100}
-      - PAPERCLIP_GATEWAY_URL=${PAPERCLIP_GATEWAY_URL:-http://paperclip:3100}
+      - PAPERCLIP_HOME=/paperclip
+      - HOST=0.0.0.0
+      - PORT=3100
+      - SERVE_UI=true
       - NODE_ENV=production
     deploy:
       resources:
@@ -65,11 +57,11 @@ services:
           cpus: '1'
           memory: 2G
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3100/api/health"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3100/api/health || wget -qO- http://localhost:3100/api/health || exit 1"]
       interval: 30s
       timeout: 10s
-      start_period: 60s
-      retries: 3
+      start_period: 90s
+      retries: 5
     logging:
       driver: "json-file"
       options:
@@ -86,8 +78,6 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/nanoclaw-ceo:${TAG:-latest}
     container_name: nanoclaw-ceo
     restart: unless-stopped
-    networks:
-      - paperclip-net
     ports:
       - "3000:3000"
     volumes:
@@ -99,9 +89,6 @@ services:
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
       - SLACK_BOARD_CHANNEL=${SLACK_BOARD_CHANNEL:-}
       - NODE_ENV=production
-    depends_on:
-      paperclip:
-        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -126,8 +113,6 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/hermes:${TAG:-latest}
     container_name: hermes-agent
     restart: unless-stopped
-    networks:
-      - paperclip-net
     ports:
       - "${HERMES_PORT:-8080}:8080"
     volumes:
@@ -136,8 +121,6 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - HERMES_MODEL=${HERMES_MODEL:-anthropic:claude-sonnet-4-6}
       - HERMES_PORT=8080
-      # Uncomment to use OpenRouter instead:
-      # - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
     deploy:
       resources:
         limits:
@@ -146,12 +129,6 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      start_period: 30s
-      retries: 3
     logging:
       driver: "json-file"
       options:
