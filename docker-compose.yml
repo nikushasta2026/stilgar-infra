@@ -7,6 +7,9 @@ version: '3.9'
 #   - paperclip:    AI Company OS (port 3100)
 #   - nanoclaw-ceo: OpenClaw CEO agent node (port 3000)
 #   - hermes:       NousResearch Hermes Agent (port 8080)
+#   - twenty-crm:   Twenty CRM (port 3200) — developer outreach CRM
+#   - twenty-db:    PostgreSQL for Twenty CRM
+#   - twenty-redis: Redis for Twenty CRM
 #
 # Managed by Coolify on the Stilgar dedicated server (61GB RAM).
 # Note: No custom network defined — Coolify manages its own bridge network.
@@ -23,6 +26,12 @@ volumes:
     name: nanoclaw-ceo-data
   hermes-data:
     name: hermes-data
+  twenty-db-data:
+    name: twenty-db-data
+  twenty-server-local-data:
+    name: twenty-server-local-data
+  twenty-redis-data:
+    name: twenty-redis-data
 
 services:
 
@@ -135,6 +144,92 @@ services:
         reservations:
           cpus: '0.5'
           memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Twenty CRM — Developer Outreach CRM (port 3200)
+  # ---------------------------------------------------------------------------
+  twenty-db:
+    image: postgres:16-alpine
+    container_name: twenty-db
+    restart: unless-stopped
+    volumes:
+      - twenty-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${TWENTY_DB_USER:-twenty}
+      - POSTGRES_PASSWORD=${TWENTY_DB_PASSWORD:-twenty}
+      - POSTGRES_DB=twenty
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TWENTY_DB_USER:-twenty} -d twenty"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  twenty-redis:
+    image: redis:7-alpine
+    container_name: twenty-redis
+    restart: unless-stopped
+    volumes:
+      - twenty-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  twenty-crm:
+    build:
+      context: ./twenty-crm
+      dockerfile: Dockerfile
+    image: ${REGISTRY:-ghcr.io/nikushasta2026}/twenty-crm:${TAG:-latest}
+    container_name: twenty-crm
+    restart: unless-stopped
+    ports:
+      - "3200:3000"
+    volumes:
+      - twenty-server-local-data:/app/packages/twenty-server/.local-storage
+    environment:
+      - PG_DATABASE_URL=postgresql://${TWENTY_DB_USER:-twenty}:${TWENTY_DB_PASSWORD:-twenty}@twenty-db:5432/twenty
+      - REDIS_URL=redis://twenty-redis:6379
+      - APP_SECRET=${TWENTY_APP_SECRET:-Q8fQC3wm9EIZRrnbtmzminBQ7Uz1n2et}
+      - SERVER_URL=${TWENTY_SERVER_URL:-http://77.42.7.12:3200}
+      - FRONT_BASE_URL=${TWENTY_SERVER_URL:-http://77.42.7.12:3200}
+      - NODE_ENV=production
+      - STORAGE_TYPE=local
+      - STORAGE_LOCAL_PATH=/app/packages/twenty-server/.local-storage
+    depends_on:
+      twenty-db:
+        condition: service_healthy
+      twenty-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      start_period: 120s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G
     logging:
       driver: "json-file"
       options:
