@@ -1,83 +1,82 @@
 # =============================================================================
 # Paperclip — AI Company OS
 # https://github.com/paperclipai/paperclip
+#
+# Builds Paperclip from source by cloning the official repo.
+# Based on the official Paperclip Dockerfile structure.
 # =============================================================================
 
-# -----------------------------------------------------------------------------
-# Stage 1: Builder
-# -----------------------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:lts-trixie-slim AS base
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates curl git \
+  && rm -rf /var/lib/apt/lists/*
+RUN corepack enable
 
-# Install build dependencies
-RUN apk add --no-cache git python3 make g++ libc6-compat
-
-# Install pnpm
-RUN npm install -g pnpm@latest
-
-WORKDIR /build
-
-# Clone Paperclip source
+# Clone Paperclip source at build time
+FROM base AS source
+WORKDIR /app
 RUN git clone --depth 1 https://github.com/paperclipai/paperclip.git .
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile || pnpm install
+FROM base AS deps
+WORKDIR /app
+COPY --from=source /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml /app/.npmrc ./
+COPY --from=source /app/cli/package.json cli/
+COPY --from=source /app/server/package.json server/
+COPY --from=source /app/ui/package.json ui/
+COPY --from=source /app/packages/shared/package.json packages/shared/
+COPY --from=source /app/packages/db/package.json packages/db/
+COPY --from=source /app/packages/adapter-utils/package.json packages/adapter-utils/
+COPY --from=source /app/packages/adapters/claude-local/package.json packages/adapters/claude-local/
+COPY --from=source /app/packages/adapters/codex-local/package.json packages/adapters/codex-local/
+COPY --from=source /app/packages/adapters/cursor-local/package.json packages/adapters/cursor-local/
+COPY --from=source /app/packages/adapters/gemini-local/package.json packages/adapters/gemini-local/
+COPY --from=source /app/packages/adapters/openclaw-gateway/package.json packages/adapters/openclaw-gateway/
+COPY --from=source /app/packages/adapters/opencode-local/package.json packages/adapters/opencode-local/
+COPY --from=source /app/packages/adapters/pi-local/package.json packages/adapters/pi-local/
+COPY --from=source /app/packages/plugins/sdk/package.json packages/plugins/sdk/
+COPY --from=source /app/patches/ patches/
+RUN pnpm install --frozen-lockfile
 
-# Set build-time env vars (non-secret defaults for build)
-ENV NODE_ENV=production
-ENV SKIP_ENV_VALIDATION=1
+# Build
+FROM base AS build
+WORKDIR /app
+COPY --from=deps /app /app
+COPY --from=source /app /app
+RUN pnpm --filter @paperclipai/ui build
+RUN pnpm --filter @paperclipai/plugin-sdk build
+RUN pnpm --filter @paperclipai/server build
+RUN test -f server/dist/index.js || (echo "ERROR: server build output missing" && exit 1)
 
-# Build the application
-RUN pnpm run build || pnpm build
-
-# -----------------------------------------------------------------------------
-# Stage 2: Runtime
-# -----------------------------------------------------------------------------
-FROM node:22-alpine AS runtime
+# Production image
+FROM base AS production
+WORKDIR /app
 
 LABEL org.opencontainers.image.source="https://github.com/nikushasta2026/stilgar-infra"
 LABEL org.opencontainers.image.description="Paperclip AI Company OS"
-LABEL org.opencontainers.image.licenses="MIT"
 
-# Install runtime dependencies only
-RUN apk add --no-cache wget curl
+COPY --chown=node:node --from=build /app /app
+RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai \
+  && mkdir -p /paperclip \
+  && chown node:node /paperclip
 
-# Install pnpm for running the app
-RUN npm install -g pnpm@latest
+ENV NODE_ENV=production \
+  HOME=/paperclip \
+  HOST=0.0.0.0 \
+  PORT=3100 \
+  SERVE_UI=true \
+  PAPERCLIP_HOME=/paperclip \
+  PAPERCLIP_INSTANCE_ID=default \
+  PAPERCLIP_CONFIG=/paperclip/instances/default/config.json \
+  PAPERCLIP_DEPLOYMENT_MODE=authenticated \
+  PAPERCLIP_DEPLOYMENT_EXPOSURE=private
 
-WORKDIR /app
-
-# Copy built artifacts from builder
-COPY --from=builder /build/.next /app/.next
-COPY --from=builder /build/public /app/public
-COPY --from=builder /build/package.json /app/package.json
-COPY --from=builder /build/pnpm-lock.yaml /app/pnpm-lock.yaml
-COPY --from=builder /build/node_modules /app/node_modules
-COPY --from=builder /build/next.config.* /app/ 2>/dev/null || true
-COPY --from=builder /build/prisma /app/prisma 2>/dev/null || true
-
-# Create persistent data directory
-RUN mkdir -p /data/paperclip && \
-    chown -R node:node /data/paperclip /app
-
-# Environment variables (overridable at runtime)
-ENV NODE_ENV=production
-ENV PORT=3100
-ENV DATABASE_URL=file:/data/paperclip/db.sqlite
-ENV NEXT_PUBLIC_APP_URL=http://localhost:3100
-ENV PAPERCLIP_DATA_DIR=/data/paperclip
-
-# Expose port
+VOLUME ["/paperclip"]
 EXPOSE 3100
 
-# Use non-root user
-USER node
-
-# Volume for persistent data
-VOLUME ["/data/paperclip"]
-
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD wget -qO- http://localhost:3100/api/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -f http://localhost:3100/api/health || exit 1
 
-# Start Paperclip
-CMD ["sh", "-c", "npx prisma migrate deploy 2>/dev/null || true && pnpm start"]
+USER node
+CMD ["node", "--import", "./server/node_modules/tsx/dist/loader.mjs", "server/dist/index.js"]
