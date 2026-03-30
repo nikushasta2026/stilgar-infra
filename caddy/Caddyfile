@@ -1,0 +1,94 @@
+# =============================================================================
+# Stilgar Caddy Reverse Proxy
+# =============================================================================
+# Caddy auto-provisions SSL via Let's Encrypt — no manual cert management.
+# Set CADDY_EMAIL env var (contact for Let's Encrypt) and point DNS before deploy.
+#
+# Domain routing:
+#   crm.{$CADDY_DOMAIN}        → twenty-crm:3000  (Twenty CRM)
+#   paperclip.{$CADDY_DOMAIN}  → paperclip:3101   (Paperclip AI OS)
+#   ceo.{$CADDY_DOMAIN}        → nanoclaw-ceo:3000 (NanoClaw CEO agent)
+#   hermes.{$CADDY_DOMAIN}     → hermes-agent:8080 (Hermes agent)
+#
+# Environment variables (set in .env):
+#   CADDY_DOMAIN  = yourdomain.com
+#   CADDY_EMAIL   = your@email.com
+# =============================================================================
+
+{
+	# Global options
+	email {$CADDY_EMAIL:admin@example.com}
+	admin 0.0.0.0:2019
+}
+
+# ---------------------------------------------------------------------------
+# Twenty CRM
+# ---------------------------------------------------------------------------
+crm.{$CADDY_DOMAIN} {
+	reverse_proxy twenty-crm:3000 {
+		# WebSocket support (Twenty uses them)
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+	log {
+		output stdout
+		level INFO
+	}
+}
+
+# ---------------------------------------------------------------------------
+# Paperclip — AI Company OS
+# ---------------------------------------------------------------------------
+paperclip.{$CADDY_DOMAIN} {
+	reverse_proxy paperclip:3101 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+	log {
+		output stdout
+		level INFO
+	}
+}
+
+# ---------------------------------------------------------------------------
+# NanoClaw CEO — OpenClaw Agent Node
+# ---------------------------------------------------------------------------
+ceo.{$CADDY_DOMAIN} {
+	reverse_proxy nanoclaw-ceo:3000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+	log {
+		output stdout
+		level INFO
+	}
+}
+
+# ---------------------------------------------------------------------------
+# Hermes Agent
+# ---------------------------------------------------------------------------
+hermes.{$CADDY_DOMAIN} {
+	reverse_proxy hermes-agent:8080 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+	log {
+		output stdout
+		level INFO
+	}
+}
+
+# ---------------------------------------------------------------------------
+# Root domain — redirect to CRM or show status
+# ---------------------------------------------------------------------------
+{$CADDY_DOMAIN} {
+	redir https://crm.{$CADDY_DOMAIN}{uri} permanent
+}

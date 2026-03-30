@@ -4,22 +4,37 @@ version: '3.9'
 # Stilgar Infrastructure — Full Stack Docker Compose
 # =============================================================================
 # Services:
-#   - paperclip:    AI Company OS (port 3100)
-#   - nanoclaw-ceo: OpenClaw CEO agent node (port 3000)
-#   - hermes:       NousResearch Hermes Agent (port 8080)
-#   - twenty-crm:   Twenty CRM (port 3200) — developer outreach CRM
+#   - caddy:        Reverse proxy + automatic SSL (ports 80, 443)
+#   - paperclip:    AI Company OS (internal only)
+#   - nanoclaw-ceo: OpenClaw CEO agent node (internal only)
+#   - hermes:       NousResearch Hermes Agent (internal only)
+#   - twenty-crm:   Twenty CRM (internal only) — developer outreach CRM
 #   - twenty-db:    PostgreSQL for Twenty CRM
 #   - twenty-redis: Redis for Twenty CRM
 #
 # Managed by Coolify on the Stilgar dedicated server (61GB RAM).
-# Note: No custom network defined — Coolify manages its own bridge network.
+#
+# Domain routing (via Caddy):
+#   crm.<CADDY_DOMAIN>        → twenty-crm
+#   paperclip.<CADDY_DOMAIN>  → paperclip
+#   ceo.<CADDY_DOMAIN>        → nanoclaw-ceo
+#   hermes.<CADDY_DOMAIN>     → hermes-agent
 #
 # Usage (standalone):
 #   cp .env.example .env && nano .env
 #   docker compose up -d
 # =============================================================================
 
+networks:
+  stilgar-net:
+    name: stilgar-net
+    driver: bridge
+
 volumes:
+  caddy-data:
+    name: caddy-data
+  caddy-config:
+    name: caddy-config
   paperclip-data:
     name: paperclip-data
   nanoclaw-ceo-data:
@@ -36,9 +51,43 @@ volumes:
 services:
 
   # ---------------------------------------------------------------------------
-  # PostgreSQL — Persistent database for Paperclip
+  # Caddy — Reverse Proxy + Automatic SSL
   # ---------------------------------------------------------------------------
-
+  caddy:
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    image: ${REGISTRY:-ghcr.io/nikushasta2026}/caddy:${TAG:-latest}
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      - caddy-data:/data           # Let's Encrypt certs persist here
+      - caddy-config:/config       # Caddy config cache
+    environment:
+      - CADDY_DOMAIN=${CADDY_DOMAIN}
+      - CADDY_EMAIL=${CADDY_EMAIL}
+    networks:
+      - stilgar-net
+    depends_on:
+      - paperclip
+      - nanoclaw-ceo
+      - hermes
+      - twenty-crm
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:2019/metrics > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   # ---------------------------------------------------------------------------
   # Paperclip — AI Company OS
@@ -50,19 +99,22 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/paperclip:${TAG:-latest}
     container_name: paperclip
     restart: unless-stopped
-    ports:
-      - "3101:3101"
+    # No external port — access via Caddy only
+    expose:
+      - "3101"
     volumes:
       - paperclip-data:/paperclip
     environment:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
-      - BETTER_AUTH_BASE_URL=${BETTER_AUTH_BASE_URL:-http://77.42.7.12:3100}
+      - BETTER_AUTH_BASE_URL=${BETTER_AUTH_BASE_URL:-https://paperclip.${CADDY_DOMAIN}}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - PAPERCLIP_HOME=/paperclip
       - HOST=0.0.0.0
       - PORT=3101
       - SERVE_UI=true
       - NODE_ENV=production
+    networks:
+      - stilgar-net
     deploy:
       resources:
         limits:
@@ -93,17 +145,20 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/nanoclaw-ceo:${TAG:-latest}
     container_name: nanoclaw-ceo
     restart: unless-stopped
-    ports:
-      - "3000:3000"
+    # No external port — access via Caddy only
+    expose:
+      - "3000"
     volumes:
       - nanoclaw-ceo-data:/agent/workspace
     environment:
       - OPENCLAW_AGENT_TOKEN=${NANOCLAW_CEO_TOKEN}
-      - PAPERCLIP_GATEWAY_URL=http://paperclip:3100
+      - PAPERCLIP_GATEWAY_URL=http://paperclip:3101
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
       - SLACK_BOARD_CHANNEL=${SLACK_BOARD_CHANNEL:-}
       - NODE_ENV=production
+    networks:
+      - stilgar-net
     deploy:
       resources:
         limits:
@@ -128,14 +183,17 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/hermes:${TAG:-latest}
     container_name: hermes-agent
     restart: unless-stopped
-    ports:
-      - "${HERMES_PORT:-8081}:8080"
+    # No external port — access via Caddy only
+    expose:
+      - "8080"
     volumes:
       - hermes-data:/home/hermes/.hermes
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - HERMES_MODEL=${HERMES_MODEL:-anthropic:claude-sonnet-4-6}
       - HERMES_PORT=8080
+    networks:
+      - stilgar-net
     deploy:
       resources:
         limits:
@@ -151,7 +209,7 @@ services:
         max-file: "5"
 
   # ---------------------------------------------------------------------------
-  # Twenty CRM — Developer Outreach CRM (port 3200)
+  # Twenty CRM — Developer Outreach CRM
   # ---------------------------------------------------------------------------
   twenty-db:
     image: postgres:16-alpine
@@ -163,6 +221,8 @@ services:
       - POSTGRES_USER=${TWENTY_DB_USER:-twenty}
       - POSTGRES_PASSWORD=${TWENTY_DB_PASSWORD:-twenty}
       - POSTGRES_DB=twenty
+    networks:
+      - stilgar-net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${TWENTY_DB_USER:-twenty} -d twenty"]
       interval: 10s
@@ -180,6 +240,8 @@ services:
     restart: unless-stopped
     volumes:
       - twenty-redis-data:/data
+    networks:
+      - stilgar-net
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -198,19 +260,22 @@ services:
     image: ${REGISTRY:-ghcr.io/nikushasta2026}/twenty-crm:${TAG:-latest}
     container_name: twenty-crm
     restart: unless-stopped
-    ports:
-      - "3200:3000"
+    # No external port — access via Caddy only
+    expose:
+      - "3000"
     volumes:
       - twenty-server-local-data:/app/packages/twenty-server/.local-storage
     environment:
       - PG_DATABASE_URL=postgresql://${TWENTY_DB_USER:-twenty}:${TWENTY_DB_PASSWORD:-twenty}@twenty-db:5432/twenty
       - REDIS_URL=redis://twenty-redis:6379
       - APP_SECRET=${TWENTY_APP_SECRET:-Q8fQC3wm9EIZRrnbtmzminBQ7Uz1n2et}
-      - SERVER_URL=${TWENTY_SERVER_URL:-http://77.42.7.12:3200}
-      - FRONT_BASE_URL=${TWENTY_SERVER_URL:-http://77.42.7.12:3200}
+      - SERVER_URL=${TWENTY_SERVER_URL:-https://crm.${CADDY_DOMAIN}}
+      - FRONT_BASE_URL=${TWENTY_SERVER_URL:-https://crm.${CADDY_DOMAIN}}
       - NODE_ENV=production
       - STORAGE_TYPE=local
       - STORAGE_LOCAL_PATH=/app/packages/twenty-server/.local-storage
+    networks:
+      - stilgar-net
     depends_on:
       twenty-db:
         condition: service_healthy
