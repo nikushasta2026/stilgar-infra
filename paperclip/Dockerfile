@@ -10,7 +10,7 @@ FROM node:lts-trixie-slim AS base
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates curl git \
   && rm -rf /var/lib/apt/lists/*
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@latest --activate
 
 # Clone Paperclip source at build time
 FROM base AS source
@@ -38,9 +38,6 @@ COPY --from=source /app/packages/plugins/sdk/package.json packages/plugins/sdk/
 COPY --from=source /app/patches/ patches/
 RUN pnpm install --frozen-lockfile
 
-# Install pnpm globally in deps stage for access in production stage
-RUN npm install -g pnpm@latest
-
 # Build
 FROM base AS build
 WORKDIR /app
@@ -67,10 +64,6 @@ COPY --from=build /app/pnpm-lock.yaml /app/pnpm-lock.yaml
 COPY --from=build /app/node_modules /app/node_modules
 COPY --from=build /app/next.config.* /app/ 2>/dev/null || true
 COPY --from=build /app/prisma /app/prisma 2>/dev/null || true
-
-# Install global CLI tools required by Paperclip
-# Copy pnpm from deps stage to ensure it's available in production
-COPY --from=deps /usr/local/lib/node_modules/pnpm /usr/local/lib/node_modules/pnpm
 
 RUN npm install --global --omit=dev @anthropic-ai/claude-code@latest @openai/codex@latest opencode-ai \
   && mkdir -p /paperclip \
