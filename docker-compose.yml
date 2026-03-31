@@ -4,12 +4,13 @@ version: '3.9'
 # Stilgar Infrastructure — Full Stack Docker Compose
 # =============================================================================
 # Services:
-#   - paperclip:    AI Company OS
-#   - nanoclaw-ceo: OpenClaw CEO agent node
-#   - hermes:       NousResearch Hermes Agent
-#   - twenty-crm:   Twenty CRM — developer outreach CRM
-#   - twenty-db:    PostgreSQL for Twenty CRM
-#   - twenty-redis: Redis for Twenty CRM
+#   - paperclip:       AI Company OS
+#   - nanoclaw-ceo:    OpenClaw CEO agent node
+#   - hermes:          NousResearch Hermes Agent
+#   - twenty-crm:      Twenty CRM — developer outreach CRM
+#   - twenty-db:       PostgreSQL for Twenty CRM (internal Twenty data)
+#   - twenty-redis:    Redis for Twenty CRM
+#   - developers-db:   PostgreSQL — 1,684 luxury RE developers (linked to Twenty via Remote Objects)
 #
 # Managed by Coolify on the Stilgar dedicated server (61GB RAM).
 # Coolify's Traefik proxy handles SSL (Let's Encrypt) and domain routing.
@@ -45,6 +46,8 @@ volumes:
     name: twenty-server-local-data
   twenty-redis-data:
     name: twenty-redis-data
+  developers-db-data:
+    name: developers-db-data
 
 services:
 
@@ -230,6 +233,36 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # ---------------------------------------------------------------------------
+  # Developers DB — Persistent PostgreSQL with 1,684 luxury RE developers
+  # Linked to Twenty CRM via Remote Objects (postgres_fdw)
+  # ---------------------------------------------------------------------------
+  developers-db:
+    build:
+      context: ./developers-db
+      dockerfile: Dockerfile
+    image: ${REGISTRY:-ghcr.io/nikushasta2026}/developers-db:${TAG:-latest}
+    container_name: developers-db
+    restart: unless-stopped
+    volumes:
+      - developers-db-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=${DEVELOPERS_DB_USER:-developers}
+      - POSTGRES_PASSWORD=${DEVELOPERS_DB_PASSWORD:-developers}
+      - POSTGRES_DB=developers
+    networks:
+      - coolify
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DEVELOPERS_DB_USER:-developers} -d developers"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
   twenty-crm:
     build:
       context: ./twenty-crm
@@ -250,6 +283,8 @@ services:
       - NODE_ENV=production
       - STORAGE_TYPE=local
       - STORAGE_LOCAL_PATH=/app/packages/twenty-server/.local-storage
+      # Remote Objects — developers database (linked via postgres_fdw in Twenty)
+      - PG_DATABASE_URL_METADATA=postgresql://${DEVELOPERS_DB_USER:-developers}:${DEVELOPERS_DB_PASSWORD:-developers}@developers-db:5432/developers
     networks:
       - coolify
     labels:
@@ -263,6 +298,8 @@ services:
       twenty-db:
         condition: service_healthy
       twenty-redis:
+        condition: service_healthy
+      developers-db:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || curl -f http://localhost:3000/api/health || exit 1"]
