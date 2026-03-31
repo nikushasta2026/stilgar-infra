@@ -11,12 +11,17 @@ version: '3.9'
 #   - twenty-db:       PostgreSQL for Twenty CRM (internal Twenty data)
 #   - twenty-redis:    Redis for Twenty CRM
 #   - developers-db:   PostgreSQL — 1,684 luxury RE developers (linked to Twenty via Remote Objects)
+#   - huly:            Huly CRM — kanban boards and deal management (NEW)
+#   - huly-mongo:      MongoDB for Huly
+#   - huly-elastic:    Elasticsearch for Huly
+#   - huly-minio:      MinIO for Huly file storage
 #
 # Managed by Coolify on the Stilgar dedicated server (61GB RAM).
 # Coolify's Traefik proxy handles SSL (Let's Encrypt) and domain routing.
 #
 # Domain routing (via Coolify/Traefik):
 #   crm.shasta-collective.com        → twenty-crm:3000
+#   huly.shasta-collective.com       → huly:3300
 #   paperclip.shasta-collective.com  → paperclip:3101
 #   ceo.shasta-collective.com        → nanoclaw-ceo:3000
 #   hermes.shasta-collective.com     → hermes-agent:8080
@@ -48,6 +53,12 @@ volumes:
     name: twenty-redis-data
   developers-db-data:
     name: developers-db-data
+  huly-mongo-data:
+    name: huly-mongo-data
+  huly-elastic-data:
+    name: huly-elastic-data
+  huly-minio-data:
+    name: huly-minio-data
 
 services:
 
@@ -315,6 +326,134 @@ services:
         reservations:
           cpus: '1'
           memory: 2G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Huly CRM — Open-source Business Operations Platform
+  # For developer outreach, kanban boards, and deal management
+  # ---------------------------------------------------------------------------
+  huly-mongo:
+    image: mongo:7-alpine
+    container_name: huly-mongo
+    restart: unless-stopped
+    volumes:
+      - huly-mongo-data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${HULY_MONGO_USER:-huly}
+      - MONGO_INITDB_ROOT_PASSWORD=${HULY_MONGO_PASSWORD:-huly}
+    networks:
+      - coolify
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  huly-elastic:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.0
+    container_name: huly-elastic
+    restart: unless-stopped
+    volumes:
+      - huly-elastic-data:/usr/share/elasticsearch/data
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    networks:
+      - coolify
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  huly-minio:
+    image: minio/minio:latest
+    container_name: huly-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    volumes:
+      - huly-minio-data:/data
+    environment:
+      - MINIO_ROOT_USER=${HULY_MINIO_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${HULY_MINIO_PASSWORD:-minioadmin}
+    networks:
+      - coolify
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      start_period: 3m
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  huly:
+    build:
+      context: ./huly
+      dockerfile: Dockerfile
+    image: ${REGISTRY:-ghcr.io/nikushasta2026}/huly:${TAG:-latest}
+    container_name: huly
+    restart: unless-stopped
+    expose:
+      - "3300"
+    depends_on:
+      huly-mongo:
+        condition: service_healthy
+      huly-elastic:
+        condition: service_healthy
+      huly-minio:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - PORT=3300
+      - HOST=0.0.0.0
+      - MONGO_URL=mongodb://${HULY_MONGO_USER:-huly}:${HULY_MONGO_PASSWORD:-huly}@huly-mongo:27017/huly
+      - ELASTIC_URL=http://huly-elastic:9200
+      - MINIO_ENDPOINT=http://huly-minio:9000
+      - MINIO_ACCESS_KEY=${HULY_MINIO_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${HULY_MINIO_PASSWORD:-minioadmin}
+      - STORAGE_MINIO_BUCKET=huly
+    networks:
+      - coolify
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.huly.rule=Host(`huly.shasta-collective.com`)"
+      - "traefik.http.routers.huly.entrypoints=https"
+      - "traefik.http.routers.huly.tls=true"
+      - "traefik.http.routers.huly.tls.certresolver=letsencrypt"
+      - "traefik.http.services.huly.loadbalancer.server.port=3300"
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3300 || curl -f http://localhost:3300 || exit 1"]
+      interval: 30s
+      timeout: 15s
+      start_period: 120s
+      retries: 5
     logging:
       driver: "json-file"
       options:
